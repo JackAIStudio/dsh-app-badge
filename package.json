@@ -1,0 +1,47 @@
+{
+  "name": "dsh-app-badge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native OS application dock/taskbar badge notifications for DeepSeek Harness (macOS Dock / Windows taskbar / Chrome PWA / JackDSH desktop)",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.zh.md",
+    "AGENTS.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JackAIStudio/dsh-app-badge.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "platform": "web"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "badge",
+    "dock",
+    "notification",
+    "pwa"
+  ],
+  "license": "MIT"
+}
