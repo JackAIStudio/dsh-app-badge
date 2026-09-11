@@ -12,6 +12,10 @@ window.__ModuleLoader__.load({
     let currentCount = 0
     let sseSource = null
     let reconnectTimeout = null
+    let badgeLeaderRelease = null
+    let badgeChannel = null
+    let lastPeerPresentAt = 0
+    let presenceTimer = null
 
     function stripTitleBadge(title) {
       return (title || '').replace(/^\(\d+\)\s*/, '')
@@ -107,19 +111,25 @@ window.__ModuleLoader__.load({
           try {
             const data = JSON.parse(event.data)
             if (data.type === 'badge') {
-              if (isUserAway()) {
+              // Any tab being watched counts as "the user is here": the leader
+              // may well be a background tab while a sibling holds focus.
+              const someonePresent = Date.now() - lastPeerPresentAt < 12000
+              if (isUserAway() && !someonePresent) {
                 setBadge(data.count || currentCount + 1)
                 showDesktopNotification(data)
+                publishBadgeState()
               } else {
                 // User is actively looking at the screen, clear immediately
                 sendClearToHost()
               }
             } else if (data.type === 'clear') {
               clearBadge()
+              publishBadgeState()
             } else if (data.type === 'init') {
               if (isUserAway() && data.count > 0) {
                 setBadge(data.count)
               }
+              publishBadgeState()
             }
           } catch {}
         }
@@ -133,6 +143,63 @@ window.__ModuleLoader__.load({
       } catch {}
     }
 
+    /**
+     * Mirror the badge count to sibling tabs, so the leader is the only tab
+     * that needs a live connection while every tab still shows the count.
+     */
+    function publishBadgeState() {
+      if (!badgeChannel) return
+      try { badgeChannel.postMessage({ type: 'state', count: currentCount }) } catch {}
+    }
+
+    function subscribeBadgeState() {
+      if (typeof BroadcastChannel === 'undefined') return
+      try {
+        badgeChannel = new BroadcastChannel('dsh-app-badge')
+        badgeChannel.onmessage = (event) => {
+          const data = event.data
+          if (!data) return
+          if (data.type === 'present') {
+            lastPeerPresentAt = Date.now()
+            return
+          }
+          if (data.type === 'state' && typeof data.count === 'number') setBadge(data.count)
+        }
+      } catch {}
+    }
+
+    /** Tell the leader tab that this tab is on screen, so it can stay quiet. */
+    function announcePresence() {
+      if (!badgeChannel) return
+      try { badgeChannel.postMessage({ type: 'present' }) } catch {}
+    }
+
+    /**
+     * Only one tab may hold the badge stream. Every tab would otherwise open
+     * its own EventSource, and Chrome allows only ~6 concurrent HTTP
+     * connections per host — two long-lived streams per tab is what caps how
+     * many DSH tabs can be open before new requests stop being served.
+     *
+     * Web Locks gives the election for free: the lock is held for as long as
+     * the tab lives and released automatically when it closes or crashes, at
+     * which point the next waiting tab takes over the stream.
+     */
+    function startBadgeLeader() {
+      if (typeof navigator === 'undefined' || !navigator.locks || typeof navigator.locks.request !== 'function') {
+        connectSse()
+        return
+      }
+      navigator.locks.request('dsh-app-badge-leader', () => {
+        connectSse()
+        return new Promise((resolve) => {
+          badgeLeaderRelease = resolve
+        })
+      }).catch(() => {
+        // Locks unusable in this shell: fall back to the old per-tab stream.
+        connectSse()
+      })
+    }
+
     function init() {
       // 1. Clean up any previous HMR instance
       if (window.__dshAppBadgeInstance) {
@@ -140,17 +207,31 @@ window.__ModuleLoader__.load({
       }
 
       // 2. Setup user interaction listeners
-      const onFocus = () => handleUserPresent()
+      const onFocus = () => {
+        announcePresence()
+        handleUserPresent()
+      }
       const onVisibility = () => {
-        if (!document.hidden) handleUserPresent()
+        if (!document.hidden) {
+          announcePresence()
+          handleUserPresent()
+        }
       }
 
       window.addEventListener('focus', onFocus)
       window.addEventListener('click', onFocus)
       document.addEventListener('visibilitychange', onVisibility)
 
+      // Keep the leader tab informed while this tab stays on screen, so a
+      // background leader never notifies about something the user is watching.
+      announcePresence()
+      presenceTimer = setInterval(() => {
+        if (!document.hidden) announcePresence()
+      }, 5000)
+
       // 3. Connect SSE event stream
-      connectSse()
+      subscribeBadgeState()
+      startBadgeLeader()
 
       // 4. Register instance cleanup
       const dispose = () => {
@@ -158,6 +239,16 @@ window.__ModuleLoader__.load({
         window.removeEventListener('click', onFocus)
         document.removeEventListener('visibilitychange', onVisibility)
         clearTimeout(reconnectTimeout)
+        clearInterval(presenceTimer)
+        presenceTimer = null
+        if (badgeLeaderRelease) {
+          try { badgeLeaderRelease() } catch {}
+          badgeLeaderRelease = null
+        }
+        if (badgeChannel) {
+          try { badgeChannel.close() } catch {}
+          badgeChannel = null
+        }
         if (sseSource) {
           try { sseSource.close() } catch {}
           sseSource = null
