@@ -14,9 +14,9 @@ DeepSeek Harness 原生应用角标（Dock / Taskbar Badge）与后台任务完�
   - 用户切到其他应用或最小化窗口时，长任务跑完或出现审批中断，角标自动累加（`1`, `2`...）；
   - 用户点击切回窗口（`focus` / `visibilitychange`）瞬间，角标自动清零并同步服务端状态。
 - **多端与跨平台兜底**：
-  - **Chrome PWA / Web App / Electron (JackDSH)**：优先调用标准 `navigator.setAppBadge`；
-  - **普通浏览器标签页**：优雅降级为网页标题动态提示 `(1) 任务标题`；
-  - **桌面横幅通知**：支持可选的 Web Notification 桌面弹窗提醒。
+  - **JackDSH 桌面端**：走 `window.jackdshNative` 原生桥，直接点亮 Dock / 任务栏红点；窗口聚焦自动清零。不弹系统横幅、不弹跳图标、不申请通知权限。
+  - **Chrome PWA / Web App**：调用标准 `navigator.setAppBadge`（JackDSH 内也会 polyfill 到同一条原生桥）。
+  - **普通浏览器标签页**：优雅降级为网页标题动态提示 `(1) 任务标题`，并保留可选的 Web Notification 横幅。
 - **无感架构**：
   - Host 端利用 Cordis 会话事件（`turn/end`、`approval/pending`）精准感知状态；
   - 通过轻量 SSE（Server-Sent Events）推送，无轮询性能开销，即使标签页节流也不会遗漏事件。

@@ -35,6 +35,12 @@ window.__ModuleLoader__.load({
       currentCount = Math.max(0, count)
       applyTitleBadge(currentCount)
 
+      // 1. JackDSH Electron native bridge
+      if (typeof window !== 'undefined' && window.jackdshNative && typeof window.jackdshNative.setBadge === 'function') {
+        try { window.jackdshNative.setBadge(currentCount) } catch {}
+      }
+
+      // 2. W3C Badging API (Chrome PWA / polyfilled)
       if (typeof navigator !== 'undefined' && 'setAppBadge' in navigator) {
         if (currentCount > 0) {
           navigator.setAppBadge(currentCount).catch(() => {})
@@ -48,6 +54,12 @@ window.__ModuleLoader__.load({
       currentCount = 0
       applyTitleBadge(0)
 
+      // 1. JackDSH Electron native bridge
+      if (typeof window !== 'undefined' && window.jackdshNative && typeof window.jackdshNative.clearBadge === 'function') {
+        try { window.jackdshNative.clearBadge() } catch {}
+      }
+
+      // 2. W3C Badging API (Chrome PWA / polyfilled)
       if (typeof navigator !== 'undefined' && 'clearAppBadge' in navigator) {
         navigator.clearAppBadge().catch(() => {})
       }
@@ -75,6 +87,14 @@ window.__ModuleLoader__.load({
     }
 
     function showDesktopNotification(data) {
+      const isJackDsh = typeof window !== 'undefined' && Boolean(window.jackdshNative)
+
+      // 1. JackDSH 极简沉静体验：桌面端不弹系统横幅、不弹跳，只靠声音知当下、红点知过往
+      if (isJackDsh) {
+        return
+      }
+
+      // 2. 浏览器 Web Notification 兜底
       if (typeof window === 'undefined' || !('Notification' in window)) return
       if (Notification.permission !== 'granted') return
 
@@ -111,9 +131,9 @@ window.__ModuleLoader__.load({
           try {
             const data = JSON.parse(event.data)
             if (data.type === 'badge') {
-              // Any tab being watched counts as "the user is here": the leader
-              // may well be a background tab while a sibling holds focus.
-              const someonePresent = Date.now() - lastPeerPresentAt < 12000
+              const isJackDsh = typeof window !== 'undefined' && Boolean(window.jackdshNative)
+              // 在 JackDSH 桌面原生客户端环境下，是唯一的独立窗口，无需受多标签 peer presence 抑制！
+              const someonePresent = isJackDsh ? false : (Date.now() - lastPeerPresentAt < 12000)
               if (isUserAway() && !someonePresent) {
                 setBadge(data.count || currentCount + 1)
                 showDesktopNotification(data)
@@ -206,6 +226,8 @@ window.__ModuleLoader__.load({
         window.__dshAppBadgeInstance.dispose()
       }
 
+      const isJackDsh = typeof window !== 'undefined' && Boolean(window.jackdshNative)
+
       // 2. Setup user interaction listeners
       const onFocus = () => {
         announcePresence()
@@ -214,13 +236,24 @@ window.__ModuleLoader__.load({
       const onVisibility = () => {
         if (!document.hidden) {
           announcePresence()
-          handleUserPresent()
+          // 在桌面客户端中，切出到后台时 document.hidden 依然为 false，绝不能在无焦点时误清空角标
+          if (!isJackDsh || (typeof document.hasFocus === 'function' && document.hasFocus())) {
+            handleUserPresent()
+          }
         }
       }
 
       window.addEventListener('focus', onFocus)
       window.addEventListener('click', onFocus)
       document.addEventListener('visibilitychange', onVisibility)
+
+      // JackDSH 原生窗口激活时同步清空角标
+      if (typeof window !== 'undefined' && window.jackdshNative?.onWindowFocused) {
+        window.jackdshNative.onWindowFocused(() => {
+          announcePresence()
+          handleUserPresent()
+        })
+      }
 
       // Keep the leader tab informed while this tab stays on screen, so a
       // background leader never notifies about something the user is watching.

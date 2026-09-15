@@ -1,6 +1,6 @@
 {
   "name": "dsh-app-badge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Native OS application dock/taskbar badge notifications for DeepSeek Harness (macOS Dock / Windows taskbar / Chrome PWA / JackDSH desktop)",
   "type": "module",
