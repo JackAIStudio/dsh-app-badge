@@ -16,6 +16,15 @@ window.__ModuleLoader__.load({
     let badgeChannel = null
     let lastPeerPresentAt = 0
     let presenceTimer = null
+    let testHoldUntil = 0
+    let clearDelayTimer = null
+
+    function cancelClearDelay() {
+      if (clearDelayTimer) {
+        clearTimeout(clearDelayTimer)
+        clearDelayTimer = null
+      }
+    }
 
     function stripTitleBadge(title) {
       return (title || '').replace(/^\(\d+\)\s*/, '')
@@ -79,10 +88,22 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function handleUserPresent() {
+    function handleUserPresent(delayMs = 2500) {
+      if (Date.now() < testHoldUntil) {
+        return
+      }
       if (currentCount > 0) {
-        clearBadge()
-        sendClearToHost()
+        cancelClearDelay()
+        if (delayMs > 0) {
+          clearDelayTimer = setTimeout(() => {
+            if (Date.now() < testHoldUntil) return
+            clearBadge()
+            sendClearToHost()
+          }, delayMs)
+        } else {
+          clearBadge()
+          sendClearToHost()
+        }
       }
     }
 
@@ -131,18 +152,34 @@ window.__ModuleLoader__.load({
           try {
             const data = JSON.parse(event.data)
             if (data.type === 'badge') {
+              const isManualOrTest = data.source === 'manual' || Date.now() < testHoldUntil
+              if (isManualOrTest) {
+                // 手动测试或保持期内：无论前台还是后台，立即点亮并保持，绝对不向后端回环发 clear
+                cancelClearDelay()
+                setBadge(data.count || currentCount || 1)
+                publishBadgeState()
+                return
+              }
+
               const isJackDsh = typeof window !== 'undefined' && Boolean(window.jackdshNative)
               // 在 JackDSH 桌面原生客户端环境下，是唯一的独立窗口，无需受多标签 peer presence 抑制！
               const someonePresent = isJackDsh ? false : (Date.now() - lastPeerPresentAt < 12000)
               if (isUserAway() && !someonePresent) {
+                cancelClearDelay()
                 setBadge(data.count || currentCount + 1)
                 showDesktopNotification(data)
                 publishBadgeState()
               } else {
-                // User is actively looking at the screen, clear immediately
+                // 用户当前正在前台专注盯屏，无需打扰程序坞角标，重置主机计数
                 sendClearToHost()
               }
             } else if (data.type === 'clear') {
+              // 若处于手动测试保护期内且非显式手动清空，不被外部被动 clear 冲掉
+              if (Date.now() < testHoldUntil && data.source !== 'manual_clear') {
+                return
+              }
+              cancelClearDelay()
+              testHoldUntil = 0
               clearBadge()
               publishBadgeState()
             } else if (data.type === 'init') {
@@ -244,7 +281,6 @@ window.__ModuleLoader__.load({
       }
 
       window.addEventListener('focus', onFocus)
-      window.addEventListener('click', onFocus)
       document.addEventListener('visibilitychange', onVisibility)
 
       // JackDSH 原生窗口激活时同步清空角标
@@ -269,8 +305,8 @@ window.__ModuleLoader__.load({
       // 4. Register instance cleanup
       const dispose = () => {
         window.removeEventListener('focus', onFocus)
-        window.removeEventListener('click', onFocus)
         document.removeEventListener('visibilitychange', onVisibility)
+        cancelClearDelay()
         clearTimeout(reconnectTimeout)
         clearInterval(presenceTimer)
         presenceTimer = null
@@ -292,17 +328,40 @@ window.__ModuleLoader__.load({
 
       // 5. Expose debug/manual interface
       window.__dshAppBadge = {
-        set: (n) => setBadge(n),
+        set: (n, holdMs = 60000) => {
+          cancelClearDelay()
+          if (holdMs > 0) {
+            testHoldUntil = Date.now() + holdMs
+          }
+          setBadge(n)
+          publishBadgeState()
+          if (typeof fetch === 'function') {
+            fetch('/dsh-app-badge/set', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ count: n, source: 'manual' }),
+            }).catch(() => {})
+          }
+        },
         clear: () => {
+          cancelClearDelay()
+          testHoldUntil = 0
           clearBadge()
-          sendClearToHost()
+          publishBadgeState()
+          if (typeof fetch === 'function') {
+            fetch('/dsh-app-badge/clear', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ source: 'manual_clear' }),
+            }).catch(() => {})
+          }
         },
         getCount: () => currentCount,
         requestNotificationPermission: () => {
-          if ('Notification' in window && Notification.permission === 'default') {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
             return Notification.requestPermission()
           }
-          return Promise.resolve(Notification.permission)
+          return Promise.resolve(typeof Notification !== 'undefined' ? Notification.permission : 'denied')
         },
       }
 

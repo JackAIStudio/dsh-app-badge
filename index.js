@@ -126,9 +126,18 @@ export function apply(ctx) {
           sendJson(res, 405, { ok: false, error: 'method not allowed' })
           return
         }
-        unreadCount = 0
-        broadcast({ type: 'clear', count: 0 })
-        sendJson(res, 200, { ok: true, count: 0 })
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', () => {
+          let source = 'auto'
+          try {
+            const data = body ? JSON.parse(body) : {}
+            if (data.source) source = data.source
+          } catch {}
+          unreadCount = 0
+          broadcast({ type: 'clear', count: 0, source })
+          sendJson(res, 200, { ok: true, count: 0 })
+        })
       },
     }), 'dsh-app-badge: clear badge')
 
